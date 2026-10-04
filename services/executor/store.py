@@ -8,6 +8,7 @@ from .models import (
     RUN_PENDING,
     RUN_RUNNING,
     STEP_DISPATCHED,
+    STEP_PENDING,
     Device,
     Run,
     Step,
@@ -88,13 +89,15 @@ class Store:
             )
             return [_step(row) for row in await cur.fetchall()]
 
-    async def start_run(self, run_id: str) -> None:
+    async def start_run(self, run_id: str) -> bool:
+        """Move a pending run to running. False if it was not pending."""
         async with self._pool.connection() as conn:
-            await conn.execute(
+            cur = await conn.execute(
                 "UPDATE runs SET status = %s, started_at = now(), updated_at = now()"
                 " WHERE id = %s AND status = %s",
                 (RUN_RUNNING, run_id, RUN_PENDING),
             )
+            return cur.rowcount == 1
 
     async def finish_run(self, run_id: str, status: str) -> None:
         async with self._pool.connection() as conn:
@@ -105,7 +108,10 @@ class Store:
             )
 
     async def record_step_dispatched(self, step_id: str) -> None:
-        """Note that a step has been sent to its driver."""
+        """Note that a driver accepted a step.
+
+        Only a pending step is updated, so a late write cannot undo a finish.
+        """
         async with self._pool.connection() as conn:
             await conn.execute(
                 "UPDATE steps"
@@ -113,8 +119,8 @@ class Store:
                 "       dispatch_count = dispatch_count + 1,"
                 "       dispatched_at = COALESCE(dispatched_at, now()),"
                 "       updated_at = now()"
-                " WHERE id = %s",
-                (STEP_DISPATCHED, step_id),
+                " WHERE id = %s AND status = %s",
+                (STEP_DISPATCHED, step_id, STEP_PENDING),
             )
 
     async def record_step_finished(self, step_id: str, status: str, error: str = "") -> None:
