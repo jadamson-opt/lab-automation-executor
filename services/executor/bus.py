@@ -80,6 +80,7 @@ class DriverState:
     dropped: int = 0
     fail_pct: int = 0
     failed: int = 0
+    step_duration_s: float = 0.0
 
 
 class BusError(Exception):
@@ -215,6 +216,7 @@ class NATSBus:
             dropped=int(data.get("dropped", 0)),
             fail_pct=int(data.get("fail_pct", 0)),
             failed=int(data.get("failed", 0)),
+            step_duration_s=float(data.get("step_duration_s", 0.0)),
         )
 
     async def close(self) -> None:

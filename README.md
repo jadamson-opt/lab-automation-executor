@@ -124,7 +124,7 @@ docker compose up --build
 First startup takes about a minute while Postgres seeds. After changing Python code:
 
 ```bash
-docker compose up --build executor
+docker compose up --build executor  
 ```
 
 Then:

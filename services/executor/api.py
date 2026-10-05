@@ -11,7 +11,7 @@ from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 
 from .bus import BusError, NATSBus
-from .models import Run, Step
+from .models import Run, Step, StepStatus
 from .scheduler import Scheduler
 from .store import RunNotFound, Store
 from .workflows import WorkflowError, load_workflows
@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 class TimelineEntry:
     name: str
     device_id: str
-    status: str
+    status: StepStatus
     depends_on: list[str]
     dispatch_count: int
     start_offset_ms: int | None

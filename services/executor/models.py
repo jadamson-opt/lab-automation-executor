@@ -1,17 +1,22 @@
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Final, Literal
 
-RUN_PENDING = "pending"
-RUN_RUNNING = "running"
-RUN_COMPLETED = "completed"
-RUN_FAILED = "failed"
-RUN_ABORTED = "aborted"
+RunStatus = Literal["pending", "running", "completed", "failed", "aborted"]
 
-STEP_PENDING = "pending"
-STEP_DISPATCHED = "dispatched"
-STEP_RUNNING = "running"
-STEP_COMPLETED = "completed"
-STEP_FAILED = "failed"
+RUN_PENDING: Final = "pending"
+RUN_RUNNING: Final = "running"
+RUN_COMPLETED: Final = "completed"
+RUN_FAILED: Final = "failed"
+RUN_ABORTED: Final = "aborted"
+
+StepStatus = Literal["pending", "dispatched", "running", "completed", "failed"]
+
+STEP_PENDING: Final = "pending"
+STEP_DISPATCHED: Final = "dispatched"
+STEP_RUNNING: Final = "running"
+STEP_COMPLETED: Final = "completed"
+STEP_FAILED: Final = "failed"
 
 
 @dataclass(frozen=True)
@@ -25,7 +30,7 @@ class Device:
 class Run:
     id: str
     workflow_name: str
-    status: str
+    status: RunStatus
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -37,7 +42,7 @@ class Step:
     run_id: str
     name: str
     device_id: str
-    status: str
+    status: StepStatus
     depends_on: list[str]
     dispatch_count: int
     dispatched_at: datetime | None

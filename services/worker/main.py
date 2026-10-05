@@ -72,6 +72,7 @@ class DriverState:
     dropped: int = 0
     fail_pct: int = 0
     failed: int = 0
+    step_duration_s: float = 0.0
 
 
 def parse_duration(text: str) -> float:
@@ -99,7 +100,12 @@ class Driver:
         self.nc = nc
         self.duration = duration
         self.failures_retryable = failures_retryable
-        self.state = DriverState(device_id=device_id, drop_result_pct=drop_pct, fail_pct=fail_pct)
+        self.state = DriverState(
+            device_id=device_id,
+            drop_result_pct=drop_pct,
+            fail_pct=fail_pct,
+            step_duration_s=duration,
+        )
         self._tasks: set[asyncio.Task[None]] = set()
 
     async def handle_command(self, msg: Msg) -> None:
