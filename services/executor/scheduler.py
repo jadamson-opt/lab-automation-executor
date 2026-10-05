@@ -166,10 +166,10 @@ class Scheduler:
             max_wait_s = (
                 dispatch.run_state.step_duration(dispatch.step_id) * STEP_MAX_WAIT_MULTIPLIER
             )
-            asyncio.get_running_loop().call_later(
-                max_wait_s, self._check_overdue, dispatch, max_wait_s
+            await asyncio.gather(
+                self._arm_overdue_check(dispatch, max_wait_s),
+                self.store.record_step_dispatched(dispatch.step_id),
             )
-            await self.store.record_step_dispatched(dispatch.step_id)
             return
 
         # ponytail: fixed delay and no limit; refusals are not failures. Back off
@@ -191,28 +191,51 @@ class Scheduler:
             del self._device_claims[dispatch.device_id]
         self._run_in_background(self._dispatch_ready_steps())
 
-    def _check_overdue(self, dispatch: Dispatch, max_wait_s: float) -> None:
+    async def _arm_overdue_check(self, dispatch: Dispatch, max_wait_s: float) -> None:
+        """Note the driver's failure count, then check for a result after max_wait_s.
+
+        Read just after the driver accepted: it cannot finish the step, and so
+        cannot count a failure for it, until the step's duration has passed.
+        """
+        try:
+            failed_before: int | None = (await self.bus.driver_state(dispatch.device_id)).failed
+        except BusError as exc:
+            log.warning("scheduler: no failure count from %s (%s)", dispatch.device_id, exc)
+            failed_before = None
+        asyncio.get_running_loop().call_later(
+            max_wait_s, self._check_overdue, dispatch, max_wait_s, failed_before
+        )
+
+    def _check_overdue(
+        self, dispatch: Dispatch, max_wait_s: float, failed_before: int | None
+    ) -> None:
         if self._is_awaiting_result(dispatch):
-            self._run_in_background(self._reconcile(dispatch, max_wait_s))
+            self._run_in_background(self._reconcile(dispatch, max_wait_s, failed_before))
 
     def _is_awaiting_result(self, dispatch: Dispatch) -> bool:
         return self._device_claims.get(dispatch.device_id) == dispatch.step_id
 
-    async def _reconcile(self, dispatch: Dispatch, max_wait_s: float) -> None:
+    async def _reconcile(
+        self, dispatch: Dispatch, max_wait_s: float, failed_before: int | None
+    ) -> None:
         """Resolve an accepted step whose result is overdue, from its driver's state.
 
         An idle driver that has executed the step did the work and lost the
-        report, so the step is taken as completed. Anything else is stuck, and
-        fails the step.
+        report. If its failure count rose meanwhile, only this step can have
+        failed, so the step failed; otherwise it is taken as completed. Anything
+        else is stuck, and fails the step.
         """
         try:
             state = await self.bus.driver_state(dispatch.device_id)
-            error = (
-                ""
-                if not state.busy and dispatch.step_id in state.executed
-                else f"no result after {max_wait_s:.1f}s and driver busy={state.busy}, "
-                f"executed step={dispatch.step_id in state.executed}"
-            )
+            if state.busy or dispatch.step_id not in state.executed:
+                error = (
+                    f"no result after {max_wait_s:.1f}s and driver busy={state.busy}, "
+                    f"executed step={dispatch.step_id in state.executed}"
+                )
+            elif failed_before is not None and state.failed > failed_before:
+                error = "result lost, and the driver counted a failure during this step"
+            else:
+                error = ""
         except BusError as exc:
             error = f"no result after {max_wait_s:.1f}s and no driver state: {exc}"
 
@@ -222,9 +245,9 @@ class Scheduler:
 
         step_name = dispatch.run_state.step_name(dispatch.step_id)
         if error:
-            log.warning("scheduler: %s on %s is stuck: %s", step_name, dispatch.device_id, error)
+            log.warning("scheduler: failing %s on %s: %s", step_name, dispatch.device_id, error)
         else:
-            # ponytail: assumes success; a dropped failure looks the same.
+            # ponytail: assumes success when the failure count is unknown.
             log.warning(
                 "scheduler: result for %s on %s lost, assuming completed",
                 step_name,
