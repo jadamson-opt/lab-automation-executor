@@ -13,6 +13,9 @@ log = logging.getLogger(__name__)
 
 RETRY_DELAY_S = 1.0
 DEFAULT_STEP_DURATION_S = 1.0
+# How long past dispatch, in step durations, before an accepted step with no
+# result is reconciled against its driver's state.
+STEP_MAX_WAIT_MULTIPLIER = 1.5
 
 
 @dataclass(frozen=True)
@@ -133,7 +136,8 @@ class Scheduler:
                 if device_id in self._device_claims:
                     continue
                 candidates_by_device.setdefault(device_id, []).extend(
-                    Dispatch(run_state, step_id, device_id) for step_id in run_state.get_ready_steps(device_id)
+                    Dispatch(run_state, step_id, device_id)
+                    for step_id in run_state.get_ready_steps(device_id)
                 )
 
         dispatches = []
@@ -159,6 +163,12 @@ class Scheduler:
             ack = CommandAck(accepted=False, reason=str(exc))
 
         if ack.accepted:
+            max_wait_s = (
+                dispatch.run_state.step_duration(dispatch.step_id) * STEP_MAX_WAIT_MULTIPLIER
+            )
+            asyncio.get_running_loop().call_later(
+                max_wait_s, self._check_overdue, dispatch, max_wait_s
+            )
             await self.store.record_step_dispatched(dispatch.step_id)
             return
 
@@ -180,6 +190,55 @@ class Scheduler:
         if self._device_claims.get(dispatch.device_id) == dispatch.step_id:
             del self._device_claims[dispatch.device_id]
         self._run_in_background(self._dispatch_ready_steps())
+
+    def _check_overdue(self, dispatch: Dispatch, max_wait_s: float) -> None:
+        if self._is_awaiting_result(dispatch):
+            self._run_in_background(self._reconcile(dispatch, max_wait_s))
+
+    def _is_awaiting_result(self, dispatch: Dispatch) -> bool:
+        return self._device_claims.get(dispatch.device_id) == dispatch.step_id
+
+    async def _reconcile(self, dispatch: Dispatch, max_wait_s: float) -> None:
+        """Resolve an accepted step whose result is overdue, from its driver's state.
+
+        An idle driver that has executed the step did the work and lost the
+        report, so the step is taken as completed. Anything else is stuck, and
+        fails the step.
+        """
+        try:
+            state = await self.bus.driver_state(dispatch.device_id)
+            error = (
+                ""
+                if not state.busy and dispatch.step_id in state.executed
+                else f"no result after {max_wait_s:.1f}s and driver busy={state.busy}, "
+                f"executed step={dispatch.step_id in state.executed}"
+            )
+        except BusError as exc:
+            error = f"no result after {max_wait_s:.1f}s and no driver state: {exc}"
+
+        # A real result may have landed while we waited for the driver.
+        if not self._is_awaiting_result(dispatch):
+            return
+
+        step_name = dispatch.run_state.step_name(dispatch.step_id)
+        if error:
+            log.warning("scheduler: %s on %s is stuck: %s", step_name, dispatch.device_id, error)
+        else:
+            # ponytail: assumes success; a dropped failure looks the same.
+            log.warning(
+                "scheduler: result for %s on %s lost, assuming completed",
+                step_name,
+                dispatch.device_id,
+            )
+        await self.handle_result(
+            StepResult(
+                run_id=dispatch.run_state.run_id,
+                step_id=dispatch.step_id,
+                step_name=step_name,
+                device_id=dispatch.device_id,
+                error=error,
+            )
+        )
 
     def _forget_run_if_finished(self, run: RunDAGState) -> None:
         if run.is_finished:
