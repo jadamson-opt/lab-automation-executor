@@ -46,6 +46,9 @@ class RunDAGState:
     def step_name(self, step_id: str) -> str:
         return self._name_by_step[step_id]
 
+    def step_duration(self, step_id: str) -> float:
+        return self._duration_by_step[step_id]
+
     def get_devices_with_ready_steps(self) -> list[str]:
         return [device_id for device_id, steps in self._ready_by_device.items() if steps]
 
