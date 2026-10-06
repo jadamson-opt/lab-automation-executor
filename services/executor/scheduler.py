@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .bus import Bus, BusError, CommandAck, StepCommand, StepResult
-from .models import RUN_COMPLETED, RUN_FAILED, STEP_COMPLETED, STEP_FAILED
+from .models import RUN_COMPLETED, RUN_FAILED, STEP_COMPLETED, STEP_FAILED, RunStatus
 from .run_dag import DispatchKey, RunDAGState
 from .store import Store
 
@@ -80,7 +80,8 @@ class Scheduler:
             )
             return
 
-        self._device_claims.pop(result.device_id, None)
+        if self._device_claims.get(result.device_id) == result.step_id:
+            del self._device_claims[result.device_id]
         run_status = self._apply_result(run_state, result)
 
         # Yield once so every result that arrived in the same tick is applied
@@ -94,7 +95,7 @@ class Scheduler:
             self._record_result(result, run_status),
         )
 
-    def _apply_result(self, run: RunDAGState, result: StepResult) -> str | None:
+    def _apply_result(self, run: RunDAGState, result: StepResult) -> RunStatus | None:
         """Update the run in memory. Returns the run's new status, if it has one."""
         run_status = None
         if result.error:
@@ -110,7 +111,7 @@ class Scheduler:
         self._forget_run_if_finished(run)
         return run_status
 
-    async def _record_result(self, result: StepResult, run_status: str | None) -> None:
+    async def _record_result(self, result: StepResult, run_status: RunStatus | None) -> None:
         """Write the step before the run, so a finished run never shows unfinished steps."""
         step_status = STEP_FAILED if result.error else STEP_COMPLETED
         await self.store.record_step_finished(result.step_id, step_status, result.error)
